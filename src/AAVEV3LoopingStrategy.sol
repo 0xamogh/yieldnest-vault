@@ -2,10 +2,13 @@
 pragma solidity ^0.8.24;
 
 import {BaseStrategy} from "src/strategy/BaseStrategy.sol";
-import {IERC20, SafeERC20, Math} from "src/Common.sol";
+import {Math} from "lib/openzeppelin-contracts/contracts/utils/math/Math.sol";
+import {IERC20} from "lib/openzeppelin-contracts/contracts/token/ERC20/IERC20.sol";
+import {IERC20Metadata} from "lib/openzeppelin-contracts/contracts/token/ERC20/extensions/IERC20Metadata.sol";
+import {SafeERC20} from "lib/openzeppelin-contracts/contracts/token/ERC20/utils/SafeERC20.sol";
 import {IPool} from "lib/aave-v3-core/contracts/interfaces/IPool.sol"; // Interface for AAVE V3 Pool
 import {IAToken} from "lib/aave-v3-core/contracts/interfaces/IAToken.sol"; // Interface for AAVE aToken
-import {IVariableDebtToken} from "lib/aave-v3-core/contracts/interfaces/IVariableDebtToken.sol"; // Interface for variable debt token
+import {VariableDebtToken} from "lib/aave-v3-core/contracts/protocol/tokenization/VariableDebtToken.sol";
 
 contract AAVEV3LoopingStrategy is BaseStrategy {
     using SafeERC20 for IERC20;
@@ -38,7 +41,7 @@ contract AAVEV3LoopingStrategy is BaseStrategy {
     IERC20 public immutable debtAsset;
     
     /// @notice The variable debt token for the debt asset
-    IVariableDebtToken public immutable variableDebtToken;
+    VariableDebtToken public immutable variableDebtToken;
 
     /// @notice The maximum collateralization ratio (e.g., 75% = 75 * 1e16)
     uint256 public maxCollateralRatio;
@@ -81,7 +84,7 @@ contract AAVEV3LoopingStrategy is BaseStrategy {
         collateralAsset = IERC20(_collateralAsset);
         aToken = IAToken(_aToken);
         debtAsset = IERC20(_debtAsset);
-        variableDebtToken = IVariableDebtToken(_variableDebtToken);
+        variableDebtToken = VariableDebtToken(_variableDebtToken);
         
         maxCollateralRatio = _maxCollateralRatio;
         minCollateralRatio = _minCollateralRatio;
@@ -89,7 +92,7 @@ contract AAVEV3LoopingStrategy is BaseStrategy {
         feePercentage = _feePercentage;
         
         // Set the collateral asset as the strategy's asset
-        _addAsset(_collateralAsset, IERC20(_collateralAsset).decimals(), true, true);
+        _addAsset(_collateralAsset, IERC20Metadata(_collateralAsset).decimals(), true);
         
         // Approve AAVE Pool to spend the collateral
         IERC20(_collateralAsset).approve(_aavePool, type(uint256).max);

@@ -6,7 +6,7 @@ import {IERC20} from "src/Common.sol";
 import {AAVEV3LoopingStrategy} from "src/AAVEV3LoopingStrategy.sol";
 import {IPool} from "lib/aave-v3-core/contracts/interfaces/IPool.sol";
 import {IAToken} from "lib/aave-v3-core/contracts/interfaces/IAToken.sol";
-import {IVariableDebtToken} from "lib/aave-v3-core/contracts/interfaces/IVariableDebtToken.sol";
+import {VariableDebtToken} from "lib/aave-v3-core/contracts/protocol/tokenization/VariableDebtToken.sol";
 import {IWETH} from "test/interface/external/ethereum/IWETH.sol";
 import {IwstETH} from "test/interface/external/lido/IwstETH.sol";
 import {IStETH} from "test/interface/external/lido/IStETH.sol";
@@ -30,10 +30,10 @@ contract AAVEV3LoopingStrategyTest is Test {
     AAVEV3LoopingStrategy public strategy;
     IPool public aavePool;
     IAToken public aWstETH;
-    IVariableDebtToken public vDebtWETH;
+    VariableDebtToken public vDebtWETH;
     IWETH public weth;
     IwstETH public wstEth;
-    IStETH public stEth;
+    IWETH public stEth;
     
     // Test addresses
     address public alice = makeAddr("alice");
@@ -54,11 +54,11 @@ contract AAVEV3LoopingStrategyTest is Test {
         aavePool = IPool(AAVE_POOL);
         weth = IWETH(WETH);
         wstEth = IwstETH(WST_ETH);
-        stEth = IStETH(ST_ETH);
+        stEth = IWETH(ST_ETH);
         
         // Get Aave aToken for wstETH and debt token for WETH
         aWstETH = IAToken(aavePool.getReserveData(WST_ETH).aTokenAddress);
-        vDebtWETH = IVariableDebtToken(aavePool.getReserveData(WETH).variableDebtTokenAddress);
+        vDebtWETH = VariableDebtToken(aavePool.getReserveData(WETH).variableDebtTokenAddress);
         
         // Deploy strategy
         vm.startPrank(admin);
@@ -181,7 +181,7 @@ contract AAVEV3LoopingStrategyTest is Test {
         vm.mockCall(
             AAVE_POOL,
             abi.encodeWithSelector(IPool.getUserAccountData.selector, address(strategy)),
-            abi.encode(initialCollateral, initialDebt * 0.9, 0, 0, 0, 2e18) // Decrease debt value by 10%
+            abi.encode(initialCollateral, (initialDebt * 9) / 10, 0, 0, 0, 2e18) // Decrease debt value by 10%
         );
         
         // Rebalance
