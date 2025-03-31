@@ -25,7 +25,7 @@ contract AAVEV3LoopingStrategyTest is Test {
     address constant WST_ETH = 0x7f39C581F595B53c5cb19bD0b3f8dA6c935E2Ca0;
     address constant ST_ETH = 0xae7ab96520DE3A18E5e111B5EaAb095312D7fE84;
     address constant WETH = 0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2;
-    
+    address constant UniswapRouter02 = 0x5C69bEe701ef814a2B6a3EDD4B1652CB9cc5aA6f;
     // Reference to contracts
     AAVEV3LoopingStrategy public strategy;
     IPool public aavePool;
@@ -68,6 +68,7 @@ contract AAVEV3LoopingStrategyTest is Test {
             address(aWstETH),
             WETH,
             address(vDebtWETH),
+            UniswapRouter02,
             MAX_RATIO,
             MIN_RATIO,
             TARGET_RATIO,
@@ -98,7 +99,7 @@ contract AAVEV3LoopingStrategyTest is Test {
         vm.stopPrank();
     }
     
-    function test_deploymentParameters() public {
+    function test_deploymentParameters() public view {
         assertEq(address(strategy.aavePool()), AAVE_POOL, "Incorrect Aave pool");
         assertEq(address(strategy.collateralAsset()), WST_ETH, "Incorrect collateral asset");
         assertEq(address(strategy.aToken()), address(aWstETH), "Incorrect aToken");
@@ -115,10 +116,12 @@ contract AAVEV3LoopingStrategyTest is Test {
         
         // Approve and deposit
         vm.startPrank(alice);
+        console2.log("wstETH address", address(wstEth));
         wstEth.approve(address(strategy), initialAmount);
         
         // Initial balance check
         uint256 aliceBalanceBefore = wstEth.balanceOf(alice);
+        console2.log("^_^ ~ test_initialDeposit ~ aliceBalanceBefore:", aliceBalanceBefore);
         uint256 strategyBalanceBefore = aWstETH.balanceOf(address(strategy));
         
         // Do the initial deposit
@@ -142,20 +145,34 @@ contract AAVEV3LoopingStrategyTest is Test {
         strategy.depositAndLoop(initialAmount);
         vm.stopPrank();
         
-        // Check balances after deposit
+        // Check aToken balance after deposit
         uint256 aTokenBalance = aWstETH.balanceOf(address(strategy));
         assertGt(aTokenBalance, strategyBalanceBefore, "aToken balance should increase");
+        
+        // Get accurate collateral and debt values from AAVE
+        (uint256 totalCollateralETH, uint256 totalDebtETH,,,,) = 
+            IPool(strategy.aavePool()).getUserAccountData(address(strategy));
+        
+        console2.log("Total Collateral (ETH): ", totalCollateralETH);
+        console2.log("Total Debt (ETH): ", totalDebtETH);
         
         // Check that we borrowed ETH and redeposited
         uint256 debtBalance = vDebtWETH.balanceOf(address(strategy));
         assertGt(debtBalance, 0, "Should have debt balance after looping");
         
-        // Calculate expected debt based on target ratio
-        uint256 collateralInETH = aTokenBalance; // Simplification for test
-        uint256 expectedDebtTarget = (collateralInETH * TARGET_RATIO) / 1e18;
+        // Calculate expected debt based on target ratio using the actual collateral value
+        uint256 expectedDebtTarget = (totalCollateralETH * TARGET_RATIO) / 1e18;
+        
+        console2.log("Expected Debt Target: ", expectedDebtTarget);
+        console2.log("Actual Debt Balance: ", debtBalance);
         
         // Should be close to target debt (not exact due to slippage simulation)
-        assertApproxEqRel(debtBalance, expectedDebtTarget, 0.05e18, "Debt should be close to target ratio");
+        assertApproxEqRel(totalDebtETH, expectedDebtTarget, 0.05e18, "Debt should be close to target ratio");
+        
+        // Additional sanity check
+        uint256 actualRatio = (totalDebtETH * 1e18) / totalCollateralETH;
+        console2.log("Actual Collateral Ratio: ", actualRatio);
+        assertApproxEqRel(actualRatio, TARGET_RATIO, 0.05e18, "Collateral ratio should be close to target");
     }
     
     function test_rebalance() public {
@@ -199,7 +216,7 @@ contract AAVEV3LoopingStrategyTest is Test {
         vm.mockCall(
             AAVE_POOL,
             abi.encodeWithSelector(IPool.getUserAccountData.selector, address(strategy)),
-            abi.encode(initialCollateral, initialDebt * 1.1, 0, 0, 0, 1.5e18) // Increase debt value by 10%
+            abi.encode(initialCollateral, (initialDebt * 11)/10, 0, 0, 0, 1.5e18) // Increase debt value by 10%
         );
         
         // Rebalance
@@ -325,7 +342,7 @@ contract AAVEV3LoopingStrategyTest is Test {
         assertEq(tokenValue, collateralValue - debtValue, "Token value should be collateral minus debt");
     }
     
-    function test_feeCalculation() public {
+    function test_feeCalculation() public view {
         uint256 amount = 1000 ether;
         
         // Test fee on raw amount

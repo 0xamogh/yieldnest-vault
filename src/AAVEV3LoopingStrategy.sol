@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: BSD-3-Clause
 pragma solidity ^0.8.24;
+import { console2} from "forge-std/Test.sol";
 
 import {BaseStrategy} from "src/strategy/BaseStrategy.sol";
 import {Math} from "lib/openzeppelin-contracts/contracts/utils/math/Math.sol";
@@ -9,6 +10,7 @@ import {SafeERC20} from "lib/openzeppelin-contracts/contracts/token/ERC20/utils/
 import {IPool} from "lib/aave-v3-core/contracts/interfaces/IPool.sol"; // Interface for AAVE V3 Pool
 import {IAToken} from "lib/aave-v3-core/contracts/interfaces/IAToken.sol"; // Interface for AAVE aToken
 import {VariableDebtToken} from "lib/aave-v3-core/contracts/protocol/tokenization/VariableDebtToken.sol";
+import { IUniswapV2Router02 } from "./interface/external/uniswap/IUniswapV2Router02.sol";
 
 contract AAVEV3LoopingStrategy is BaseStrategy {
     using SafeERC20 for IERC20;
@@ -55,12 +57,15 @@ contract AAVEV3LoopingStrategy is BaseStrategy {
     /// @notice The fee percentage for the strategy (in basis points, e.g., 100 = 1%)
     uint256 public feePercentage;
 
+    IUniswapV2Router02 public immutable uniswapRouter;
+
     /// @notice Constructor to initialize the strategy
     /// @param _aavePool The address of the AAVE V3 Pool contract
     /// @param _collateralAsset The address of the collateral asset (e.g., wstETH)
     /// @param _aToken The address of the aToken for the collateral asset
     /// @param _debtAsset The address of the debt asset (e.g., ETH)
     /// @param _variableDebtToken The address of the variable debt token for the debt asset
+    /// @param _uniswapRouter The address of the uniswap router
     /// @param _maxCollateralRatio The maximum collateralization ratio (e.g., 75 * 1e16 for 75%)
     /// @param _minCollateralRatio The minimum collateralization ratio (e.g., 70 * 1e16 for 70%)
     /// @param _targetCollateralRatio The target collateralization ratio (e.g., 72 * 1e16 for 72%)
@@ -71,6 +76,7 @@ contract AAVEV3LoopingStrategy is BaseStrategy {
         address _aToken,
         address _debtAsset,
         address _variableDebtToken,
+        address _uniswapRouter,
         uint256 _maxCollateralRatio,
         uint256 _minCollateralRatio,
         uint256 _targetCollateralRatio,
@@ -80,12 +86,17 @@ contract AAVEV3LoopingStrategy is BaseStrategy {
         require(_targetCollateralRatio > _minCollateralRatio, "Target ratio must be greater than min");
         require(_feePercentage <= 1000, "Fee percentage too high"); // Max 10%
         
+        _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
+        _grantRole(ALLOCATOR_ROLE, msg.sender);
+        _grantRole(ASSET_MANAGER_ROLE, msg.sender);
+
         aavePool = IPool(_aavePool);
         collateralAsset = IERC20(_collateralAsset);
         aToken = IAToken(_aToken);
         debtAsset = IERC20(_debtAsset);
         variableDebtToken = VariableDebtToken(_variableDebtToken);
-        
+        uniswapRouter = IUniswapV2Router02(_uniswapRouter);
+
         maxCollateralRatio = _maxCollateralRatio;
         minCollateralRatio = _minCollateralRatio;
         targetCollateralRatio = _targetCollateralRatio;
@@ -149,6 +160,7 @@ contract AAVEV3LoopingStrategy is BaseStrategy {
     
     /// @notice Internal function to perform the looping process based on the current position
     function _loop() internal {
+        console2.log("debtAssetBalanc1", debtAsset.balanceOf(address(this)));
         (uint256 totalCollateralETH, uint256 totalDebtETH, , , , uint256 healthFactor) = 
             aavePool.getUserAccountData(address(this));
             
@@ -158,6 +170,8 @@ contract AAVEV3LoopingStrategy is BaseStrategy {
                 
             // Calculate the target debt amount
             uint256 targetDebtETH = (totalCollateralETH * targetCollateralRatio) / 1e18;
+            console2.log("^_^ ~ _getCurrentCollateralRatio ~ targetDebtETH:", targetDebtETH);
+
             
             // If we already have debt, calculate how much more to borrow
             uint256 amountToBorrow = 0;
@@ -166,6 +180,7 @@ contract AAVEV3LoopingStrategy is BaseStrategy {
             }
             
             if (amountToBorrow > 0) {
+                console2.log("debtAssetBalance2", debtAsset.balanceOf(address(this)));
                 // Borrow debt asset
                 aavePool.borrow(
                     address(debtAsset), 
@@ -175,10 +190,9 @@ contract AAVEV3LoopingStrategy is BaseStrategy {
                     address(this)
                 );
                 
-                // Swap the borrowed asset back to collateral (simulated with a 1:1 ratio)
-                // In a real implementation, you would use a DEX or other swapping mechanism
-                uint256 swappedCollateral = amountToBorrow;
-                
+                // Swap the borrowed asset back to collateral
+                uint256 swappedCollateral = _swap(address(debtAsset), address(collateralAsset), amountToBorrow);
+
                 // Deposit the swapped collateral back into AAVE
                 aavePool.supply(address(collateralAsset), swappedCollateral, address(this), 0);
             }
@@ -223,7 +237,7 @@ contract AAVEV3LoopingStrategy is BaseStrategy {
             
             // Swap collateral to debt asset (simulated with a 1:1 ratio)
             // In a real implementation, you would use a DEX or other swapping mechanism
-            uint256 swappedDebt = debtToRepay;
+            uint256 swappedDebt = _swap(address(collateralAsset), address(debtAsset), debtToRepay);
             
             // Repay debt
             debtAsset.approve(address(aavePool), swappedDebt);
@@ -436,5 +450,23 @@ contract AAVEV3LoopingStrategy is BaseStrategy {
         }
         
         IERC20(token).safeTransfer(to, amount);
+    }
+    /// @notice Simple Uniswap V2 Swap function
+    function _swap(address fromToken, address toToken, uint256 amountIn) internal returns (uint256 amountOut) {
+        require(amountIn > 0, "Amount in must be greater than zero");
+        // Define the path of the swap (fromToken -> toToken)
+        address[] memory path = new address[](2);
+        path[0] = fromToken;
+        path[1] = toToken;
+        // Approve the Uniswap router to spend the `fromToken`
+        IERC20(fromToken).approve(address(uniswapRouter), amountIn);
+        uint256[] memory amounts = uniswapRouter.swapExactTokensForTokens(
+            amountIn,
+            0,  // Accept any amount of output tokens
+            path,
+            address(this),
+            block.timestamp
+        );
+        amountOut = amounts[1];
     }
 }
